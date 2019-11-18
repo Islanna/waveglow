@@ -32,12 +32,16 @@ import torch
 import torch.utils.data
 import sys
 from scipy.io.wavfile import read
+import soundfile as sf
 
 # We're using the audio processing from TacoTron2 to make sure it matches
 sys.path.insert(0, 'tacotron2')
 from tacotron2.layers import TacotronSTFT
+from tacotron2.stft import STFT
+from tacotron2.audio_processing import dynamic_range_compression
 
 MAX_WAV_VALUE = 32768.0
+
 
 def files_to_list(filename):
     """
@@ -49,11 +53,15 @@ def files_to_list(filename):
     files = [f.rstrip() for f in files]
     return files
 
-def load_wav_to_torch(full_path):
+
+def load_wav_to_torch(full_path, audio_format='wav'):
     """
-    Loads wavdata into torch array
+    Loads wav/ogg into torch array
     """
-    sampling_rate, data = read(full_path)
+    if audio_format == 'wav':
+        sampling_rate, data = read(full_path)
+    elif audio_format == 'ogg':
+        data, sampling_rate = sf.read(full_path, dtype='int16')
     return torch.from_numpy(data).float(), sampling_rate
 
 
@@ -63,30 +71,46 @@ class Mel2Samp(torch.utils.data.Dataset):
     spectrogram, audio pair.
     """
     def __init__(self, training_files, segment_length, filter_length,
-                 hop_length, win_length, sampling_rate, mel_fmin, mel_fmax):
+                 hop_length, win_length, sampling_rate, data_folder, audio_format,
+                 return_stft=True):
         self.audio_files = files_to_list(training_files)
         random.seed(1234)
         random.shuffle(self.audio_files)
-        self.stft = TacotronSTFT(filter_length=filter_length,
-                                 hop_length=hop_length,
-                                 win_length=win_length,
-                                 sampling_rate=sampling_rate,
-                                 mel_fmin=mel_fmin, mel_fmax=mel_fmax)
+        self.return_stft = return_stft
+        if self.return_stft:
+            self.stft = STFT(filter_length=filter_length,
+                             hop_length=hop_length,
+                             win_length=win_length)
+        else:
+            self.stft = TacotronSTFT(filter_length=filter_length,
+                                     hop_length=hop_length,
+                                     win_length=win_length,
+                                     sampling_rate=sampling_rate,
+                                     mel_fmin=0.0, mel_fmax=8000.0)
         self.segment_length = segment_length
         self.sampling_rate = sampling_rate
+        self.data_folder = data_folder
+        self.audio_format = audio_format
 
-    def get_mel(self, audio):
+    def get_stft(self, audio):
         audio_norm = audio / MAX_WAV_VALUE
         audio_norm = audio_norm.unsqueeze(0)
         audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
-        melspec = self.stft.mel_spectrogram(audio_norm)
-        melspec = torch.squeeze(melspec, 0)
-        return melspec
+        if self.return_stft:
+            magnitudes, phases = self.stft.transform(audio_norm)
+            magnitudes = dynamic_range_compression(magnitudes)
+            magnitudes = torch.squeeze(magnitudes, 0)
+            return magnitudes
+        else:
+            melspec = self.stft.mel_spectrogram(audio_norm)
+            melspec = torch.squeeze(melspec, 0)
+            return melspec
 
     def __getitem__(self, index):
         # Read audio
         filename = self.audio_files[index]
-        audio, sampling_rate = load_wav_to_torch(filename)
+        filename = os.path.join(self.data_folder, filename)
+        audio, sampling_rate = load_wav_to_torch(filename, self.audio_format)
         if sampling_rate != self.sampling_rate:
             raise ValueError("{} SR doesn't match target {} SR".format(
                 sampling_rate, self.sampling_rate))
@@ -99,10 +123,10 @@ class Mel2Samp(torch.utils.data.Dataset):
         else:
             audio = torch.nn.functional.pad(audio, (0, self.segment_length - audio.size(0)), 'constant').data
 
-        mel = self.get_mel(audio)
+        stft = self.get_stft(audio)
         audio = audio / MAX_WAV_VALUE
 
-        return (mel, audio)
+        return (stft, audio)
 
     def __len__(self):
         return len(self.audio_files)
@@ -117,8 +141,8 @@ if __name__ == "__main__":
     parser.add_argument('-f', "--filelist_path", required=True)
     parser.add_argument('-c', '--config', type=str,
                         help='JSON file for configuration')
-    parser.add_argument('-o', '--output_dir', type=str,
-                        help='Output directory')
+    # parser.add_argument('-o', '--output_dir', type=str,
+    #                    help='Output directory')
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -128,15 +152,20 @@ if __name__ == "__main__":
 
     filepaths = files_to_list(args.filelist_path)
 
-    # Make directory if it doesn't exist
-    if not os.path.isdir(args.output_dir):
-        os.makedirs(args.output_dir)
-        os.chmod(args.output_dir, 0o775)
+    result = mel2samp[0]
+    print(result[0].shape, result[1].shape)
 
-    for filepath in filepaths:
-        audio, sr = load_wav_to_torch(filepath)
-        melspectrogram = mel2samp.get_mel(audio)
-        filename = os.path.basename(filepath)
-        new_filepath = args.output_dir + '/' + filename + '.pt'
-        print(new_filepath)
-        torch.save(melspectrogram, new_filepath)
+    # Make directory if it doesn't exist
+    # if not os.path.isdir(args.output_dir):
+    #    os.makedirs(args.output_dir)
+    #    os.chmod(args.output_dir, 0o775)
+
+    # for filepath in filepaths:
+    #    audio, sr = load_wav_to_torch(filepath)
+    #    melspectrogram = mel2samp.get_mel(audio)
+    #    filename = os.path.basename(filepath)
+    #    new_filepath = args.output_dir + '/' + filename + '.pt'
+    #    print(new_filepath)
+    #    torch.save(melspectrogram, new_filepath)
+
+    # python3 mel2samp.py -f ../tacotron2/data/cv_ps_ogg_v3_waveglow.txt -c config.json
