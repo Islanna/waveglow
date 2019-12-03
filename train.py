@@ -123,7 +123,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
             mel = torch.autograd.Variable(mel.cuda())
             audio = torch.autograd.Variable(audio.cuda())
             outputs = model((mel, audio))
-
+            break
             loss = criterion(outputs)
             if num_gpus > 1:
                 reduced_loss = reduce_tensor(loss.data, num_gpus).item()

@@ -75,7 +75,7 @@ class Invertible1x1Conv(torch.nn.Module):
 
         # Ensure determinant is 1.0 not -1.0
         if torch.det(W) < 0:
-            W[:,0] = -1*W[:,0]
+            W[:, 0] = -1*W[:, 0]
         W = W.view(c, c, 1)
         self.conv.weight.data = W
 
@@ -108,8 +108,8 @@ class WN(torch.nn.Module):
     from WaveNet is the convolutions need not be causal.  There is also no dilation
     size reset.  The dilation only doubles on each layer
     """
-    def __init__(self, n_in_channels, n_mel_channels, n_layers, n_channels,
-                 kernel_size):
+    def __init__(self, n_in_channels, n_mel_channels, speaker_emb_size,
+                 n_layers, n_channels, kernel_size):
         super(WN, self).__init__()
         assert(kernel_size % 2 == 1)
         assert(n_channels % 2 == 0)
@@ -132,6 +132,9 @@ class WN(torch.nn.Module):
         cond_layer = torch.nn.Conv1d(n_mel_channels, 2*n_channels*n_layers, 1)
         self.cond_layer = torch.nn.utils.weight_norm(cond_layer, name='weight')
 
+        speaker_layer = torch.nn.Conv1d(speaker_emb_size, 2*n_channels, 1)
+        self.speaker_layer = torch.nn.utils.weight_norm(speaker_layer, name='weight')
+
         for i in range(n_layers):
             dilation = 2 ** i
             padding = int((kernel_size*dilation - dilation)/2)
@@ -139,7 +142,6 @@ class WN(torch.nn.Module):
                                        dilation=dilation, padding=padding)
             in_layer = torch.nn.utils.weight_norm(in_layer, name='weight')
             self.in_layers.append(in_layer)
-
 
             # last one is not necessary
             if i < n_layers - 1:
@@ -151,24 +153,26 @@ class WN(torch.nn.Module):
             self.res_skip_layers.append(res_skip_layer)
 
     def forward(self, forward_input):
-        audio, spect = forward_input
+        audio, spect, speaker_emb = forward_input
         audio = self.start(audio)
         output = torch.zeros_like(audio)
         n_channels_tensor = torch.IntTensor([self.n_channels])
 
         spect = self.cond_layer(spect)
+        speaker_emb = self.speaker_layer(speaker_emb)
 
         for i in range(self.n_layers):
             spect_offset = i*2*self.n_channels
             acts = fused_add_tanh_sigmoid_multiply(
                 self.in_layers[i](audio),
-                spect[:,spect_offset:spect_offset+2*self.n_channels,:],
+                spect[:, spect_offset:spect_offset+2*self.n_channels, :],
+                speaker_emb,
                 n_channels_tensor)
 
             res_skip_acts = self.res_skip_layers[i](acts)
             if i < self.n_layers - 1:
-                audio = audio + res_skip_acts[:,:self.n_channels,:]
-                output = output + res_skip_acts[:,self.n_channels:,:]
+                audio = audio + res_skip_acts[:, :self.n_channels, :]
+                output = output + res_skip_acts[:, self.n_channels:, :]
             else:
                 output = output + res_skip_acts
 
@@ -208,8 +212,10 @@ class WaveGlow(torch.nn.Module):
         """
         forward_input[0] = mel_spectrogram:  batch x n_mel_channels x frames
         forward_input[1] = audio: batch x time
+        UPD
+        forward_input[2] = speaker embeddings: batch x speaker_embedding_size
         """
-        spect, audio = forward_input
+        spect, audio, speaker_emb = forward_input
 
         #  Upsample spectrogram to size of audio
         spect = self.upsample(spect)
@@ -221,32 +227,33 @@ class WaveGlow(torch.nn.Module):
         spect = spect.contiguous().view(spect.size(0), spect.size(1), -1).permute(0, 2, 1)
 
         audio = audio.unfold(1, self.n_group, self.n_group).permute(0, 2, 1)
+        speaker_emb = speaker_emb[:, :, None].repeat(1, 1, audio.size(2))
         output_audio = []
         log_s_list = []
         log_det_W_list = []
 
         for k in range(self.n_flows):
             if k % self.n_early_every == 0 and k > 0:
-                output_audio.append(audio[:,:self.n_early_size,:])
-                audio = audio[:,self.n_early_size:,:]
+                output_audio.append(audio[:, :self.n_early_size, :])
+                audio = audio[:, self.n_early_size:, :]
 
             audio, log_det_W = self.convinv[k](audio)
             log_det_W_list.append(log_det_W)
 
             n_half = int(audio.size(1)/2)
-            audio_0 = audio[:,:n_half,:]
-            audio_1 = audio[:,n_half:,:]
+            audio_0 = audio[:, :n_half, :]
+            audio_1 = audio[:, n_half:, :]
 
-            output = self.WN[k]((audio_0, spect))
+            output = self.WN[k]((audio_0, spect, speaker_emb))
             log_s = output[:, n_half:, :]
             b = output[:, :n_half, :]
             audio_1 = torch.exp(log_s)*audio_1 + b
             log_s_list.append(log_s)
 
-            audio = torch.cat([audio_0, audio_1],1)
+            audio = torch.cat([audio_0, audio_1], 1)
 
         output_audio.append(audio)
-        return torch.cat(output_audio,1), log_s_list, log_det_W_list
+        return torch.cat(output_audio, 1), log_s_list, log_det_W_list
 
     def infer(self, spect, sigma=1.0):
         spect = self.upsample(spect)
@@ -270,15 +277,15 @@ class WaveGlow(torch.nn.Module):
 
         for k in reversed(range(self.n_flows)):
             n_half = int(audio.size(1)/2)
-            audio_0 = audio[:,:n_half,:]
-            audio_1 = audio[:,n_half:,:]
+            audio_0 = audio[:, :n_half, :]
+            audio_1 = audio[:, n_half:, :]
 
             output = self.WN[k]((audio_0, spect))
 
             s = output[:, n_half:, :]
             b = output[:, :n_half, :]
             audio_1 = (audio_1 - b)/torch.exp(s)
-            audio = torch.cat([audio_0, audio_1],1)
+            audio = torch.cat([audio_0, audio_1], 1)
 
             audio = self.convinv[k](audio, reverse=True)
 
@@ -287,9 +294,9 @@ class WaveGlow(torch.nn.Module):
                     z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
                 else:
                     z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
-                audio = torch.cat((sigma*z, audio),1)
+                audio = torch.cat((sigma*z, audio), 1)
 
-        audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data
+        audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
         return audio
 
     @staticmethod
@@ -299,6 +306,7 @@ class WaveGlow(torch.nn.Module):
             WN.start = torch.nn.utils.remove_weight_norm(WN.start)
             WN.in_layers = remove(WN.in_layers)
             WN.cond_layer = torch.nn.utils.remove_weight_norm(WN.cond_layer)
+            WN.speaker_layer = torch.nn.utils.remove_weight_norm(WN.speaker_layer)
             WN.res_skip_layers = remove(WN.res_skip_layers)
         return waveglow
 

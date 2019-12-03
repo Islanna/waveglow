@@ -1,7 +1,7 @@
 {
     "train_config": {
         "fp16_run": true,
-        "output_directory": "checkpoints_cv_ps_ogg_v4_20ms",
+        "output_directory": "ruslan_test/",
         "epochs": 100000,
         "learning_rate": 1e-4,
         "sigma": 1.0,
@@ -12,14 +12,15 @@
         "with_tensorboard": true
     },
     "data_config": {
-        "training_files": "../tacotron2/data/cv_ps_vc_ogg_v4_waveglow.txt",
+        "training_files": "../taco-encoder-id/data/ruslan_16k_waveglow.txt",
         "segment_length": 16000,
         "sampling_rate": 16000,
         "filter_length": 320,
         "hop_length": 160,
         "win_length": 320,
-        "data_folder": "../tacotron2/",
-        "audio_format": "ogg"
+        "data_folder": "../taco-encoder-id/",
+        "audio_format": "wav",
+        "return_stft": false
     },
     "dist_config": {
         "dist_backend": "nccl",
@@ -27,7 +28,7 @@
     },
 
     "waveglow_config": {
-        "n_mel_channels": 161,
+        "n_mel_channels": 80,
         "n_flows": 12,
         "n_group": 8,
         "n_early_every": 4,
@@ -37,5 +38,12 @@
             "n_channels": 256,
             "kernel_size": 3
         }
+    },
+
+    "speaker_encoder_config": {
+        "n_mel_channels": 80,
+        "speaker_embedding_size": 256,
+        "speaker_checkpoint": "",
+        "partials_n_frames": 160
     }
 }
