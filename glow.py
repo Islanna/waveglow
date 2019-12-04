@@ -31,9 +31,9 @@ import torch.nn.functional as F
 
 
 @torch.jit.script
-def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
+def fused_add_tanh_sigmoid_multiply(input_a, input_b, input_s, n_channels):
     n_channels_int = n_channels[0]
-    in_act = input_a+input_b
+    in_act = input_a+input_b+input_s
     t_act = torch.tanh(in_act[:, :n_channels_int, :])
     s_act = torch.sigmoid(in_act[:, n_channels_int:, :])
     acts = t_act * s_act
@@ -180,7 +180,7 @@ class WN(torch.nn.Module):
 
 
 class WaveGlow(torch.nn.Module):
-    def __init__(self, n_mel_channels, n_flows, n_group, n_early_every,
+    def __init__(self, speaker_emb_size, n_mel_channels, n_flows, n_group, n_early_every,
                  n_early_size, WN_config):
         super(WaveGlow, self).__init__()
 
@@ -205,7 +205,7 @@ class WaveGlow(torch.nn.Module):
                 n_half = n_half - int(self.n_early_size/2)
                 n_remaining_channels = n_remaining_channels - self.n_early_size
             self.convinv.append(Invertible1x1Conv(n_remaining_channels))
-            self.WN.append(WN(n_half, n_mel_channels*n_group, **WN_config))
+            self.WN.append(WN(n_half, n_mel_channels*n_group, speaker_emb_size, **WN_config))
         self.n_remaining_channels = n_remaining_channels  # Useful during inference
 
     def forward(self, forward_input):

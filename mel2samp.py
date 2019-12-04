@@ -121,7 +121,7 @@ class Mel2Samp(torch.utils.data.Dataset):
             audio_start = random.randint(0, max_audio_start)
             audio = audio[audio_start:audio_start+self.segment_length]
         else:
-            audio = torch.nn.functional.pad(audio, (0, 0, 0, self.segment_length - audio.size(0)), 'constant').data
+            audio = torch.nn.functional.pad(audio, (0, self.segment_length - audio.size(0)), 'constant').data
             print('{} - NOT ENOUGH FRAMES'.format(filename))
         stft = self.get_stft(audio)
         audio = audio / MAX_WAV_VALUE
