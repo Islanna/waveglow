@@ -255,7 +255,7 @@ class WaveGlow(torch.nn.Module):
         output_audio.append(audio)
         return torch.cat(output_audio, 1), log_s_list, log_det_W_list
 
-    def infer(self, spect, sigma=1.0):
+    def infer(self, spect, sigma=1.0, speaker_emb=None):
         spect = self.upsample(spect)
         # trim conv artifacts. maybe pad spec to kernel multiple
         time_cutoff = self.upsample.kernel_size[0] - self.upsample.stride[0]
@@ -274,13 +274,14 @@ class WaveGlow(torch.nn.Module):
                                            spect.size(2)).normal_()
 
         audio = torch.autograd.Variable(sigma*audio)
+        speaker_emb = speaker_emb[:, :, None].repeat(1, 1, audio.size(2))
 
         for k in reversed(range(self.n_flows)):
             n_half = int(audio.size(1)/2)
             audio_0 = audio[:, :n_half, :]
             audio_1 = audio[:, n_half:, :]
 
-            output = self.WN[k]((audio_0, spect))
+            output = self.WN[k]((audio_0, spect, speaker_emb))  # forward?
 
             s = output[:, n_half:, :]
             b = output[:, :n_half, :]

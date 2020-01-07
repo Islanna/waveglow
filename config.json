@@ -1,7 +1,7 @@
 {
     "train_config": {
         "fp16_run": false,
-        "output_directory": "ruslan_test/",
+        "output_directory": "vctk_test/",
         "epochs": 100000,
         "learning_rate": 1e-4,
         "sigma": 1.0,
@@ -12,14 +12,14 @@
         "with_tensorboard": true
     },
     "data_config": {
-        "training_files": "../taco-encoder-id/data/ruslan_16k_waveglow.txt",
+        "training_files": "../taco-encoder-id/data/vctk_waveglow.txt",
         "segment_length": 16000,
         "sampling_rate": 16000,
-        "filter_length": 320,
-        "hop_length": 160,
-        "win_length": 320,
+        "filter_length": 768,
+        "hop_length": 192,
+        "win_length": 768,
         "data_folder": "../taco-encoder-id/",
-        "audio_format": "wav",
+        "audio_format": "ogg",
         "return_stft": false
     },
     "dist_config": {
@@ -44,6 +44,6 @@
         "n_mel_channels": 80,
         "speaker_embedding_size": 256,
         "speaker_checkpoint": "../taco-encoder-id/speaker_encoder/encoder_saved_models/cv_ps_vc_v6_mel_50ms_ogg_gpu_256_80nframes.pt",
-        "partials_n_frames": 160
+        "partials_n_frames": 80
     }
 }
